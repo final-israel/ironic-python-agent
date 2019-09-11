@@ -66,6 +66,7 @@ class TestInspect(base.IronicAgentTest):
         super(TestInspect, self).setUp()
         CONF.set_override('inspection_callback_url', 'http://foo/bar')
         CONF.set_override('inspection_collectors', '')
+        CONF.set_override('inspection_actions', '')
         self.mock_collect = AcceptingFailure()
         self.mock_ext = mock.Mock(spec=['plugin', 'name'],
                                   plugin=self.mock_collect)
@@ -79,6 +80,19 @@ class TestInspect(base.IronicAgentTest):
         self.mock_collect.assert_called_with_failure()
         mock_call.assert_called_with_failure()
         self.assertEqual('uuid1', result)
+
+    def test_actions_option(self, mock_ext_mgr, mock_call):
+        CONF.set_override('inspection_actions', 'foo,bar')
+        mock_ext_mgr.return_value = [
+            mock.Mock(spec=['name', 'plugin'], plugin=AcceptingFailure()),
+            mock.Mock(spec=['name', 'plugin'], plugin=AcceptingFailure()),
+        ]
+
+        inspector.inspect()
+
+        for fake_ext in mock_ext_mgr.return_value:
+            fake_ext.plugin.assert_called_with_failure()
+        mock_call.assert_called_with_failure()
 
     def test_collectors_option(self, mock_ext_mgr, mock_call):
         CONF.set_override('inspection_collectors', 'foo,bar')
@@ -101,6 +115,14 @@ class TestInspect(base.IronicAgentTest):
                                'boom', inspector.inspect)
 
         self.mock_collect.assert_called_with_failure()
+        mock_call.assert_called_with_failure(expect_error=True)
+
+    def test_actions_failed(self, mock_ext_mgr, mock_call):
+        CONF.set_override('inspection_actions', 'foo,bar')
+        mock_ext_mgr.side_effect = RuntimeError('boom')
+
+        self.assertRaisesRegex(RuntimeError, 'boom', inspector.inspect)
+
         mock_call.assert_called_with_failure(expect_error=True)
 
     def test_extensions_failed(self, mock_ext_mgr, mock_call):

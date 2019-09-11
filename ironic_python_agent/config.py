@@ -136,6 +136,15 @@ cli_opts = [
                     'Can be supplied as "ipa-inspection-callback-url" '
                     'kernel parameter.'),
 
+    cfg.StrOpt('inspection_actions',
+               default=APARAMS.get('ipa-inspection-actions',
+                                   inspector.DEFAULT_ACTION),
+               help='# Comma-separated list of plugins providing additional '
+                    'actions for the pre-inspection phase, empty value results '
+                    'in no actions being performed. Can be supplied as '
+                    '"ipa-inspection-actions" kernel parameter.'
+               ),
+
     cfg.StrOpt('inspection_collectors',
                default=APARAMS.get('ipa-inspection-collectors',
                                    inspector.DEFAULT_COLLECTOR),

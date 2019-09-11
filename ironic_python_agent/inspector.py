@@ -32,22 +32,31 @@ from ironic_python_agent import utils
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
+DEFAULT_ACTION = 'default'
 DEFAULT_COLLECTOR = 'default'
 DEFAULT_DHCP_WAIT_TIMEOUT = 60
 
 _DHCP_RETRY_INTERVAL = 2
+_ACTION_NS = 'ironic_python_agent.inspector.actions'
 _COLLECTOR_NS = 'ironic_python_agent.inspector.collectors'
 _NO_LOGGING_FIELDS = ('logs',)
 
+def _action_manager_err_callback(names):
+    raise errors.InspectionError('Failed to load action %s' % names)
 
-def _extension_manager_err_callback(names):
+def action_manager(names):
+    return stevedore.NamedExtensionManager(
+        _ACTION_NS, names=names, name_order=True,
+        on_missing_entrypoints_callback=_action_manager_err_callback)
+
+def _collector_manager_err_callback(names):
     raise errors.InspectionError('Failed to load collector %s' % names)
 
 
-def extension_manager(names):
+def collector_manager(names):
     return stevedore.NamedExtensionManager(
         _COLLECTOR_NS, names=names, name_order=True,
-        on_missing_entrypoints_callback=_extension_manager_err_callback)
+        on_missing_entrypoints_callback=_collector_manager_err_callback)
 
 
 def inspect():
@@ -63,6 +72,11 @@ def inspect():
     if not CONF.inspection_callback_url:
         LOG.info('Inspection is disabled, skipping')
         return
+
+    action_names = [x.strip() for x in CONF.inspection_actions.split(',')
+                       if x.strip()]
+    LOG.info('inspection is enabled with actions %s', action_names)
+
     collector_names = [x.strip() for x in CONF.inspection_collectors.split(',')
                        if x.strip()]
     LOG.info('inspection is enabled with collectors %s', collector_names)
@@ -75,7 +89,22 @@ def inspect():
     data = {}
 
     try:
-        ext_mgr = extension_manager(collector_names)
+        ext_mgr = action_manager(action_names)
+        actions = [(ext.name, ext.plugin) for ext in ext_mgr]
+    except Exception as exc:
+        with excutils.save_and_reraise_exception():
+            failures.add(exc)
+            call_inspector(data, failures)
+
+    for name, action in actions:
+        try:
+            action(data, failures)
+        except Exception as exc:
+            # No reraise here, try to keep going
+            failures.add('action %s failed: %s', name, exc)
+
+    try:
+        ext_mgr = collector_manager(collector_names)
         collectors = [(ext.name, ext.plugin) for ext in ext_mgr]
     except Exception as exc:
         with excutils.save_and_reraise_exception():
@@ -175,6 +204,17 @@ def wait_for_dhcp():
                 {'timeout': CONF.inspection_dhcp_wait_timeout,
                  'missing': missing})
     return False
+
+
+def action_default(data, failures):
+    """The default inspection action.
+
+    This is the only action that is called by default. It does nothing.
+
+    :param data: mutable data that we'll send to inspector
+    :param failures: AccumulatedFailures object
+    """
+    LOG.info('Running default action and doing nothing')
 
 
 def collect_default(data, failures):
