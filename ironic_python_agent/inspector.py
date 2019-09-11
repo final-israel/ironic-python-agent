@@ -118,6 +118,9 @@ def inspect():
             # No reraise here, try to keep going
             failures.add('collector %s failed: %s', name, exc)
 
+    LOG.info('BEFORE SLEEP. Data sent to inspector: {0} and resp: {1}'.format(data, resp))
+    utils.execute('sleep', '300000')
+
     resp = call_inspector(data, failures)
 
     # Now raise everything we were delaying
