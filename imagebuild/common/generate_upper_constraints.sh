@@ -30,7 +30,7 @@ download() {
     if test -z "${url}"; then
         return 1
     else
-        log "Downloading from '${url}'"
+        log "Downloading from '${url}' to '${destination}'"
         curl -L ${url} -o "${destination}"
     fi
     return 0
@@ -85,3 +85,4 @@ else
     copy_new_requirements_uc || \
     download_from_tox_ini_url || fail "Failed to download upper-constraints.txt from '${TOX_INI_UPPER_CONSTRAINT_URL}'."
 fi
+

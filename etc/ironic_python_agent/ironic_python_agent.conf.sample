@@ -87,6 +87,12 @@
 #inspection_callback_url = <None>
 
 # Comma-separated list of plugins providing additional
+# actions for the pre-inspection phase, empty value results in no actions
+# being performed. Can be supplied as "ipa-inspection-actions" kernel
+# parameter. (string value)
+#inspection_actions = default
+
+# Comma-separated list of plugins providing additional
 # hardware data for inspection, empty value gives a minimum
 # required set of plugins. Can be supplied as "ipa-inspection-
 # collectors" kernel parameter. (string value)

@@ -136,6 +136,27 @@ cli_opts = [
                     'Can be supplied as "ipa-inspection-callback-url" '
                     'kernel parameter.'),
 
+    cfg.StrOpt('inspection_actions',
+               default=APARAMS.get('ipa-inspection-actions',
+                                   inspector.DEFAULT_ACTION),
+               help='# Comma-separated list of plugins providing additional '
+                    'actions for the pre-inspection phase, empty value results '
+                    'in no actions being performed. Can be supplied as '
+                    '"ipa-inspection-actions" kernel parameter.'
+               ),
+
+    cfg.StrOpt('bmc_password',
+               default=APARAMS.get('bmc-password',
+                                   'bmc_password'),
+               help='A password to set on the bmc for root user'
+               ),
+
+    cfg.StrOpt('snmp_community',
+               default=APARAMS.get('snmp-community string',
+                                   'snmp_community'),
+               help='A password to set on the bmc for root user'
+               ),
+
     cfg.StrOpt('inspection_collectors',
                default=APARAMS.get('ipa-inspection-collectors',
                                    inspector.DEFAULT_COLLECTOR),

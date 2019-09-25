@@ -615,8 +615,13 @@ class GenericHardwareManager(HardwareManager):
             processed_tlvs = []
             for typ, data in tlvs:
                 try:
+                    try:
+                        displayable_data = data.encode('utf-8', 'ignore')
+                    except:
+                        displayable_data = 'NON-DISPLAYABLE'
+
                     processed_tlvs.append((typ,
-                                           binascii.hexlify(data).decode()))
+                                           binascii.hexlify(data).decode(), displayable_data))
                 except (binascii.Error, binascii.Incomplete) as e:
                     LOG.warning('An error occurred while processing TLV type '
                                 '%s for interface %s: %s', (typ, ifname, e))

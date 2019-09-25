@@ -32,22 +32,31 @@ from ironic_python_agent import utils
 
 LOG = logging.getLogger(__name__)
 CONF = cfg.CONF
+DEFAULT_ACTION = 'default'
 DEFAULT_COLLECTOR = 'default'
 DEFAULT_DHCP_WAIT_TIMEOUT = 60
 
 _DHCP_RETRY_INTERVAL = 2
+_ACTION_NS = 'ironic_python_agent.inspector.actions'
 _COLLECTOR_NS = 'ironic_python_agent.inspector.collectors'
 _NO_LOGGING_FIELDS = ('logs',)
 
+def _action_manager_err_callback(names):
+    raise errors.InspectionError('Failed to load action %s' % names)
 
-def _extension_manager_err_callback(names):
+def action_manager(names):
+    return stevedore.NamedExtensionManager(
+        _ACTION_NS, names=names, name_order=True,
+        on_missing_entrypoints_callback=_action_manager_err_callback)
+
+def _collector_manager_err_callback(names):
     raise errors.InspectionError('Failed to load collector %s' % names)
 
 
-def extension_manager(names):
+def collector_manager(names):
     return stevedore.NamedExtensionManager(
         _COLLECTOR_NS, names=names, name_order=True,
-        on_missing_entrypoints_callback=_extension_manager_err_callback)
+        on_missing_entrypoints_callback=_collector_manager_err_callback)
 
 
 def inspect():
@@ -63,9 +72,15 @@ def inspect():
     if not CONF.inspection_callback_url:
         LOG.info('Inspection is disabled, skipping')
         return
+
+
     collector_names = [x.strip() for x in CONF.inspection_collectors.split(',')
                        if x.strip()]
     LOG.info('inspection is enabled with collectors %s', collector_names)
+
+    action_names = [x.strip() for x in CONF.inspection_actions.split(',')
+                       if x.strip()]
+    LOG.info('inspection is enabled with actions %s', action_names)
 
     # NOTE(dtantsur): inspection process tries to delay raising any exceptions
     # until after we posted some data back to inspector. This is because
@@ -75,7 +90,7 @@ def inspect():
     data = {}
 
     try:
-        ext_mgr = extension_manager(collector_names)
+        ext_mgr = collector_manager(collector_names)
         collectors = [(ext.name, ext.plugin) for ext in ext_mgr]
     except Exception as exc:
         with excutils.save_and_reraise_exception():
@@ -88,6 +103,25 @@ def inspect():
         except Exception as exc:
             # No reraise here, try to keep going
             failures.add('collector %s failed: %s', name, exc)
+
+    try:
+        ext_mgr = action_manager(action_names)
+        actions = [(ext.name, ext.plugin) for ext in ext_mgr]
+    except Exception as exc:
+        with excutils.save_and_reraise_exception():
+            failures.add(exc)
+            call_inspector(data, failures)
+
+    for name, action in actions:
+        try:
+            action(data, failures)
+        except Exception as exc:
+            # No reraise here, try to keep going
+            failures.add('action %s failed: %s', name, exc)
+
+    encoder = encoding.RESTJSONEncoder()
+    LOG.info('bEFORE SLEEP. Data sent to inspector: {0}'.format(encoder.encode(data)))
+    #utils.execute('sleep', '300000')
 
     resp = call_inspector(data, failures)
 
@@ -122,6 +156,29 @@ def call_inspector(data, failures):
         return
 
     return resp.json()
+
+
+def _generate_hostname(data):
+    boot_mac = _normalize_mac(data['boot_interface'])
+    hostname = 'CannotGenLLDPName'
+    for iface in data['inventory']['interfaces']:
+        if iface.mac_address != boot_mac:
+            continue
+
+        if iface.lldp is None:
+            continue
+
+        for tlv_type, encoded, disp in iface.lldp:
+            # 5 is System Name in the lld protocol
+            if tlv_type != 5:
+                continue
+
+            hostname = '{0}-{1}'.format(
+                disp,
+                data['inventory']['system_vendor'].serial_number
+            )
+
+    return hostname
 
 
 def _normalize_mac(mac):
@@ -177,6 +234,150 @@ def wait_for_dhcp():
     return False
 
 
+def action_default(data, failures):
+    """The default inspection action.
+
+    This is the only action that is called by default. It does nothing.
+
+    :param data: mutable data that we'll send to inspector
+    :param failures: AccumulatedFailures object
+    """
+    LOG.info('Running default actions')
+
+    manufacturer = data['inventory']['system_vendor'].manufacturer
+
+    if manufacturer != 'Dell Inc.':
+        LOG.warning(
+            'We only support Dell IDRAC configuration. {0} is not '
+            'supported'.format(manufacturer)
+        )
+
+        return
+
+    stdout, _stderr = utils.execute('racadm', 'getconfig', '-u', 'root')
+    lines = stdout.split('\n')
+
+    racadm_idx = None
+    for line in lines:
+        idx = line.find('#cfgUserAdminIndex=')
+        if idx == -1:
+            continue
+
+        racadm_idx = line[idx + len('#cfgUserAdminIndex=')]
+        break
+
+    if racadm_idx is None:
+        LOG.error('Failed to read bmc configuration for user root')
+        failures.add('Failed to read bmc configuration for user root')
+        return
+
+    racadm_cmds = [
+        [
+            # Set DHCP for the bmc
+            'racadm',
+            'setniccfg',
+            '-d',
+        ],
+        [
+            'racadm',
+            'config',
+            '-g',
+            'cfguseradmin',
+            '-o',
+            'cfguseradminpassword',
+            '-i',
+            racadm_idx,
+            CONF.bmc_password
+        ],
+        [
+            # Remote RACADM/IPMI commands enable
+            'racadm',
+            'set',
+            'iDRAC.IPMILan.Enable',
+            'Enabled'
+        ],
+        [
+            # Active NIC Interface Dedicated
+            'racadm',
+            'set',
+            'idrac.NIC.Selection',
+            'Dedicated'
+        ],
+        [
+            # Set SNMP Community Name
+            'racadm',
+            'set',
+            'iDRAC.SNMP.AgentCommunity',
+            CONF.snmp_community
+        ],
+        [
+            # Set the server to boot via bios
+            'racadm',
+            'set',
+            'bios.BiosBootSettings.BootMode',
+            'Bios'
+        ],
+        [
+            # Set the server to boot via bios
+            'racadm',
+            'set',
+            'bios.BiosBootSettings.BootMode',
+            'Bios'
+        ],
+        [
+            'racadm',
+            'set',
+            'BIOS.ProcSettings.LogicalProc',
+            'Disabled'
+        ],
+        [
+            'racadm',
+            'set',
+            'BIOS.ProcSettings.ControlledTurbo',
+            'Enabled'
+        ],
+        [
+            'racadm',
+            'set',
+            'BIOS.ProcSettings.ProcVirtualization',
+            'Enabled'
+        ],
+        [
+            'racadm',
+            'set',
+            'bios.SysProfileSettings.SysProfile',
+            'PerfOptimized'
+        ],
+        [
+            'racadm',
+            'jobqueue',
+            'create',
+            'BIOS.Setup.1-1'
+        ],
+    ]
+
+    for cmd in racadm_cmds:
+        try:
+            _stdout, _stderr = utils.execute(*cmd)
+        except Exception as exc:
+            LOG.exception('')
+            failures.add('Failed to execute command %s', exc)
+
+    # Let the iDRAC get its IP address from the DHCP
+    threshold = time.time() + CONF.inspection_dhcp_wait_timeout
+    while time.time() <= threshold:
+        data['inventory']['bmc_address'] = \
+            hardware.dispatch_to_managers('get_bmc_address')
+
+        if data['inventory']['bmc_address'] != '0.0.0.0':
+            return
+
+        LOG.debug('Still waiting for iDRAC to get IP from DHCP')
+        time.sleep(_DHCP_RETRY_INTERVAL)
+
+    failures.add('Failed to get iDRAC IP from DHCP')
+
+
 def collect_default(data, failures):
     """The default inspection collector.
 
@@ -207,6 +408,13 @@ def collect_default(data, failures):
     # The boot interface might not be present, we don't count it as failure.
     # TODO(dtantsur): stop using the boot_interface field.
     data['boot_interface'] = inventory['boot'].pxe_interface
+
+    try:
+        data['hostname'] = _generate_hostname(data)
+    except:
+        LOG.exception('Failed to generate hostname')
+        failures.add('Failed to generate hostname')
+
     LOG.debug('boot devices was %s', data['boot_interface'])
     LOG.debug('BMC IP address: %s', inventory.get('bmc_address'))
 
